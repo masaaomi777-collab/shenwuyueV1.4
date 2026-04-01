@@ -34,7 +34,7 @@ export function Game({ levelConfig, playerState, onBack, onGameOver, onPrologueE
 
   useEffect(() => {
     // Play background music
-    const bgmUrl = `/res/sound/Battle%20%2313801.wav`;
+    const bgmUrl = `/res/sound/battle.wav`;
     soundManager.playBGM(bgmUrl);
     
     return () => {
