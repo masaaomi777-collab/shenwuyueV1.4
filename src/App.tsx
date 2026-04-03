@@ -5,17 +5,23 @@
 
 import React, { useState, useEffect } from 'react';
 import { Game } from './components/Game';
-import { MainMenu } from './components/MainMenu';
+import { MainMenu, LevelNavOverlay, IdleRewardOverlay } from './components/MainMenu';
 import { SummonView } from './components/SummonView';
 import { HeroDevelopmentView } from './components/HeroDevelopmentView';
+import { FortressView } from './components/FortressView';
 import { PlayerState, LevelConfig, HeroType } from './game/types';
 import { LEVELS } from './game/constants';
 import { assets } from './game/AssetManager';
 import { Ghost, Home, User } from 'lucide-react';
+import { AnimatePresence } from 'motion/react';
 
 const INITIAL_PLAYER_STATE: PlayerState = {
   upgradeTickets: 100,
   summonTickets: 20,
+  gold: 10000,
+  gems: 706,
+  stamina: 172,
+  maxStamina: 80,
   unlockedLevels: 1,
   prologueCompleted: false,
   heroes: {
@@ -25,10 +31,11 @@ const INITIAL_PLAYER_STATE: PlayerState = {
     wind: { type: 'wind', level: 1, star: 1, shards: 0, isDeployed: true },
     rock: { type: 'rock', level: 1, star: 1, shards: 0, isDeployed: false },
     shadow: { type: 'shadow', level: 1, star: 1, shards: 0, isDeployed: false },
-  }
+  },
+  formation: ['flame', 'ice', 'lightning', 'wind'],
 };
 
-type View = 'main_menu' | 'summon' | 'hero_dev' | 'game';
+type View = 'main_menu' | 'summon' | 'hero_dev' | 'fortress' | 'game';
 
 export default function App() {
   const [view, setView] = useState<View>('main_menu');
@@ -36,9 +43,17 @@ export default function App() {
   const [prologueEnabled, setPrologueEnabled] = useState(false);
   const [playerState, setPlayerState] = useState<PlayerState>(() => {
     const saved = localStorage.getItem('playerState');
-    return saved ? JSON.parse(saved) : INITIAL_PLAYER_STATE;
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return { ...INITIAL_PLAYER_STATE, ...parsed, formation: parsed.formation || INITIAL_PLAYER_STATE.formation };
+    }
+    return INITIAL_PLAYER_STATE;
   });
   const [selectedLevel, setSelectedLevel] = useState<LevelConfig>(LEVELS[0]);
+  
+  // Overlay states moved to App level to cover bottom nav
+  const [showLevelNav, setShowLevelNav] = useState(false);
+  const [showIdleReward, setShowIdleReward] = useState(false);
 
   useEffect(() => {
     setLoading(false);
@@ -72,13 +87,13 @@ export default function App() {
   };
 
   return (
-    <div className="w-full h-screen bg-black flex items-center justify-center overflow-hidden">
-      <div className="relative w-full max-w-md h-full bg-black shadow-2xl overflow-hidden flex flex-col">
+    <div className="w-full h-screen bg-[#0a0a0a] flex items-center justify-center overflow-hidden p-0 sm:p-4">
+      <div className="relative w-full max-w-[450px] aspect-[9/16] bg-black shadow-[0_0_100px_rgba(0,0,0,0.8)] overflow-hidden flex flex-col border-x border-white/5">
         {/* Background for UI Views - Moved here to fill entire screen including bottom nav */}
         {view !== 'game' && !loading && (
           <div 
             className="absolute inset-0 bg-cover bg-bottom pointer-events-none z-0"
-            style={{ backgroundImage: 'url(/res/UI/bg.png)' }}
+            style={{ backgroundImage: 'url(/res/UI/bg.jpg)' }}
           />
         )}
         {loading ? (
@@ -96,13 +111,18 @@ export default function App() {
           />
         ) : (
           <>
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto relative z-10">
               {view === 'main_menu' && (
                 <MainMenu 
                   playerState={playerState} 
                   onStart={handleStartGame} 
                   prologueEnabled={prologueEnabled}
                   setPrologueEnabled={setPrologueEnabled}
+                  showLevelNav={showLevelNav}
+                  setShowLevelNav={setShowLevelNav}
+                  showIdleReward={showIdleReward}
+                  setShowIdleReward={setShowIdleReward}
+                  setLevelIdx={(idx) => setSelectedLevel(LEVELS[idx])}
                 />
               )}
               {view === 'summon' && (
@@ -113,6 +133,12 @@ export default function App() {
               )}
               {view === 'hero_dev' && (
                 <HeroDevelopmentView 
+                  playerState={playerState} 
+                  setPlayerState={setPlayerState} 
+                />
+              )}
+              {view === 'fortress' && (
+                <FortressView 
                   playerState={playerState} 
                   setPlayerState={setPlayerState} 
                 />
@@ -143,7 +169,35 @@ export default function App() {
                 <img src="/res/UI/btn_ts.png" alt="天师" className="w-10 h-10 object-contain" referrerPolicy="no-referrer" />
                 <span className="text-[10px] font-bold tracking-widest text-[#d4af37]">天师</span>
               </button>
+              <button 
+                onClick={() => setView('fortress')}
+                className={`flex flex-col items-center gap-1 transition-all ${view === 'fortress' ? 'scale-110' : 'opacity-60 hover:opacity-100'}`}
+              >
+                <img src="/res/UI/btn_ts.png" alt="堡垒" className="w-10 h-10 object-contain" referrerPolicy="no-referrer" />
+                <span className="text-[10px] font-bold tracking-widest text-[#d4af37]">堡垒</span>
+              </button>
             </div>
+
+            {/* Global Overlays (Rendered here to cover bottom nav) */}
+            <AnimatePresence>
+              {showLevelNav && (
+                <div className="absolute inset-0 z-[100]">
+                  <LevelNavOverlay 
+                    playerState={playerState} 
+                    onClose={() => setShowLevelNav(false)} 
+                    onSelectLevel={(idx) => {
+                      setSelectedLevel(LEVELS[idx]);
+                      setShowLevelNav(false);
+                    }}
+                  />
+                </div>
+              )}
+              {showIdleReward && (
+                <div className="absolute inset-0 z-[100]">
+                  <IdleRewardOverlay onClose={() => setShowIdleReward(false)} />
+                </div>
+              )}
+            </AnimatePresence>
           </>
         )}
       </div>

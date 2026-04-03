@@ -74,6 +74,23 @@ export const LEVELS: LevelConfig[] = [
   }
 ];
 
+export const HERO_IMAGES: Record<string, string> = {
+  flame: '/NEWRES/hero1.png',
+  ice: '/NEWRES/hero2.png',
+  lightning: '/NEWRES/hero3.png',
+  wind: '/NEWRES/hero4.png',
+  rock: '/res/role/C001/run_1.png',
+  shadow: '/res/role/M002/shanzei-run_0.png',
+};
+
+export const ELEMENT_ICONS: Record<string, string> = {
+  flame: '/res/UI/fire.png',
+  ice: '/res/UI/ice.png',
+  lightning: '/res/UI/thunder.png',
+  wind: '/res/UI/wind.png',
+  rock: '/res/UI/erhe.png',
+  shadow: '/res/UI/hulu.png',
+};
 export const SKILL_TREES: Record<string, SkillNode[]> = {
   flame: [
     { id: 'flame_A', heroType: 'flame', tier: 'basic', name: '火球伤害', desc: '火球伤害+50%', reqs: [] },

@@ -33,8 +33,8 @@ export class GameEngine {
   isPrologue = false;
   prologueTargetMaterials = 3;
 
-  grid: (GridSlot | null)[] = Array(10).fill(null);
-  summonCount = 0;
+  isSpinning = false;
+  slotResult: { type: 'hero' | 'upgrade' | 'gold', value: any } | null = null;
   coins = 250;
   energy = 0;
   maxEnergy = 5;
@@ -74,9 +74,9 @@ export class GameEngine {
     this.levelConfig = level;
     this.playerState = playerState;
     
-    // Use deployed heroes from player state
-    this.activeElements = (Object.keys(playerState.heroes) as HeroType[])
-      .filter(type => playerState.heroes[type].isDeployed);
+    // Use formation from player state
+    const formation = playerState.formation || ['flame', 'ice', 'lightning', 'wind'];
+    this.activeElements = formation.filter((type): type is HeroType => type !== null);
     
     // Ensure at least some elements if none deployed (fallback)
     if (this.activeElements.length === 0) {
@@ -91,6 +91,21 @@ export class GameEngine {
     if (level.id === 1 && !playerState.prologueCompleted) {
       this.isPrologue = true;
       this.initPrologue();
+    } else {
+      // Initialize heroes from deployed state
+      this.activeElements.forEach((type, i) => {
+        // Position heroes in a fan shape in front of the fortress
+        const angle = this.fortress.rotation + (i - 1.5) * 0.3;
+        const dist = 60;
+        this.heroes.push({
+          id: `initial_${type}`,
+          x: this.fortress.x + Math.cos(angle) * dist,
+          y: this.fortress.y + Math.sin(angle) * dist,
+          hp: 500, maxHp: 500, speed: 60, radius: 20,
+          heroType: type, star: 1, attackCooldown: 1, lastAttackTime: 0, ultCooldown: 10, lastUltTime: 0,
+          currentAnim: 'run', frameIndex: 0, animTimer: 0
+        });
+      });
     }
 
     // Generate decorations if not provided
@@ -220,7 +235,7 @@ export class GameEngine {
   }
 
   get summonCost() {
-    return Math.min(300, 50 + Math.floor(this.summonCount / 2) * 10);
+    return 100;
   }
 
   update(time: number) {
@@ -627,30 +642,41 @@ export class GameEngine {
         continue;
       }
 
-      // Movement
-      const dx = this.fortress.x - m.x;
-      const dy = this.fortress.y - m.y;
-      const dist = Math.hypot(dx, dy);
+      // Movement and Targeting
+      let targetObj: { x: number, y: number, radius: number, id: string, type: 'fortress' | 'hero' } = { 
+        x: this.fortress.x, y: this.fortress.y, radius: this.fortress.radius, id: 'fortress', type: 'fortress' 
+      };
+      let minDist = Math.hypot(this.fortress.x - m.x, this.fortress.y - m.y);
+
+      // Check if any hero is closer and can block
+      this.heroes.forEach(h => {
+        const d = Math.hypot(h.x - m.x, h.y - m.y);
+        if (d < minDist) {
+          minDist = d;
+          targetObj = { x: h.x, y: h.y, radius: h.radius, id: h.id, type: 'hero' };
+        }
+      });
+
+      const dx = targetObj.x - m.x;
+      const dy = targetObj.y - m.y;
+      const dist = minDist;
 
       if (m.monsterType === 'M001') {
         // M001 stationary at top, but still attacks when in range
-        // Reverted relative positioning as requested
-        if (dist <= this.fortress.radius + m.radius + 700) { 
+        if (dist <= targetObj.radius + m.radius + 700) { 
           m.isAttacking = true;
         } else {
           m.isAttacking = false;
         }
-        // Ensure M001 speed stays 0 to prevent drifting
         m.speed = 0;
       } else {
-        // Catch-up logic: if monster is behind the fortress, speed up
+        // Catch-up logic
         const dot = Math.cos(this.fortress.rotation) * (m.x - this.fortress.x) + Math.sin(this.fortress.rotation) * (m.y - this.fortress.y);
         if (dot < 0 && !m.isAttacking) {
-          // Monster is behind the fortress
           m.speed = Math.max(m.speed, this.fortress.speed + 20);
         }
 
-        if (dist > this.fortress.radius + m.radius) {
+        if (dist > targetObj.radius + m.radius) {
           m.x += (dx / dist) * m.speed * dt;
           m.y += (dy / dist) * m.speed * dt;
           m.isAttacking = false;
@@ -670,26 +696,42 @@ export class GameEngine {
           }
           
           let damageTaken = m.damage;
-          if (this.fortressDamageReduction > 0) {
-            damageTaken *= (1 - this.fortressDamageReduction);
-          }
-          if (this.fortressShield > 0) {
-            if (this.fortressShield >= damageTaken) {
-              this.fortressShield -= damageTaken;
-              damageTaken = 0;
-            } else {
-              damageTaken -= this.fortressShield;
-              this.fortressShield = 0;
+          
+          if (targetObj.type === 'fortress') {
+            if (this.fortressDamageReduction > 0) {
+              damageTaken *= (1 - this.fortressDamageReduction);
+            }
+            if (this.fortressShield > 0) {
+              if (this.fortressShield >= damageTaken) {
+                this.fortressShield -= damageTaken;
+                damageTaken = 0;
+              } else {
+                damageTaken -= this.fortressShield;
+                this.fortressShield = 0;
+              }
+            }
+            this.fortress.hp -= damageTaken;
+            this.fortressAttacked = true;
+            if (this.fortress.hp <= 0) {
+              this.fortress.hp = 0;
+              if (this.onGameOver) this.onGameOver('lose');
+              this.isPaused = true;
+            }
+          } else {
+            // Attack hero
+            const hero = this.heroes.find(h => h.id === targetObj.id);
+            if (hero) {
+              hero.hp -= damageTaken;
+              if (hero.hp <= 0) {
+                // Hero "dies" but we just respawn or disable them? 
+                // For now, let's just keep them at 1hp or remove them
+                hero.hp = 0;
+                this.heroes = this.heroes.filter(h => h.id !== hero.id);
+              }
             }
           }
-          this.fortress.hp -= damageTaken;
-          this.fortressAttacked = true;
+          
           m.lastAttackTime = this.lastTime;
-          if (this.fortress.hp <= 0) {
-            this.fortress.hp = 0;
-            if (this.onGameOver) this.onGameOver('lose');
-            this.isPaused = true;
-          }
         }
       }
     }
@@ -709,19 +751,12 @@ export class GameEngine {
       const isVertical = Math.abs(Math.cos(rot)) < 0.3; // Close to PI/2 or -PI/2
       
       for (let i = 0; i < waveCount; i++) {
-        let angle: number;
-        if (isVertical) {
-          // Spawn only in front (approx 60 degree cone)
-          const cone = Math.PI / 3;
-          angle = rot + (Math.random() - 0.5) * cone;
-        } else {
-          // Normal circular dispersion
-          angle = Math.random() * Math.PI * 2;
-        }
+        // Always spawn in front (approx 90 degree cone)
+        const cone = Math.PI / 2;
+        const angle = rot + (Math.random() - 0.5) * cone;
 
-        // Randomly spawn some monsters on-screen (closer) with fade-in
-        const isOnScreenSpawn = Math.random() > 0.6;
-        const spawnDist = isOnScreenSpawn ? (200 + Math.random() * 100) : (600 + Math.random() * 200);
+        // Spawn further away to appear from the horizon
+        const spawnDist = 800 + Math.random() * 400;
         
         const hp = (50 + this.level * 10) * (this.levelConfig.monsterHpMult || 1);
         const speed = (40 + Math.random() * 10) * (this.levelConfig.monsterSpeedMult || 1);
@@ -731,14 +766,14 @@ export class GameEngine {
           id: Math.random().toString(),
           x: this.fortress.x + Math.cos(angle) * spawnDist,
           y: this.fortress.y + Math.sin(angle) * spawnDist,
-          hp, maxHp: hp, speed, radius: 6, // M002 scaled down by 1/2 (from 12 to 6)
+          hp, maxHp: hp, speed, radius: 6,
           damage: 5 + this.level, attackCooldown: 1, lastAttackTime: 0, isAttacking: false, buffs: [],
           monsterType: mType,
           flipX: Math.random() > 0.5,
           currentAnim: 'run',
           frameIndex: 0,
           animTimer: 0,
-          alpha: isOnScreenSpawn ? 0 : 1 // Fade in if spawned on screen
+          alpha: 0 // Always fade in
         });
       }
     }
@@ -766,8 +801,22 @@ export class GameEngine {
   }
 
   updateCombat(dt: number) {
-    // Update hero animations
-    this.heroes.forEach(h => {
+    // Update hero positions to stay in front of the fortress with some dynamic movement
+    this.heroes.forEach((h, i) => {
+      const targetAngle = this.fortress.rotation + (i - (this.heroes.length - 1) / 2) * 0.4;
+      const targetDist = 80 + Math.sin(this.lastTime / 500 + i) * 10;
+      const targetX = this.fortress.x + Math.cos(targetAngle) * targetDist;
+      const targetY = this.fortress.y + Math.sin(targetAngle) * targetDist;
+
+      // Smoothly move hero towards target position
+      const dx = targetX - h.x;
+      const dy = targetY - h.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 1) {
+        h.x += (dx / dist) * h.speed * dt;
+        h.y += (dy / dist) * h.speed * dt;
+      }
+
       if (h.frameIndex === undefined) h.frameIndex = 0;
       if (h.animTimer === undefined) h.animTimer = 0;
       h.animTimer += dt;
@@ -848,6 +897,11 @@ export class GameEngine {
           let pierce = 0;
           let bounces = 0;
           
+          // Gun barrel offset (forward from car center)
+          const barrelOffset = 40;
+          const startX = this.fortress.x + Math.cos(this.fortress.rotation) * barrelOffset;
+          const startY = this.fortress.y + Math.sin(this.fortress.rotation) * barrelOffset;
+
           if (el === 'flame') {
             if (this.unlockedSkills.has('flame_A')) dmg *= 1.5;
             if (this.unlockedSkills.has('flame_F')) pierce = 1;
@@ -858,7 +912,7 @@ export class GameEngine {
               if (targets.length === 0) targets.push(target);
               targets.forEach((t) => {
                 this.projectiles.push({
-                  id: Math.random().toString(), x: this.fortress.x, y: this.fortress.y,
+                  id: Math.random().toString(), x: startX, y: startY,
                   targetId: t.id, targetX: t.x, targetY: t.y, damage: dmg, speed, source: 'fortress', heroType: el, pierceCount: this.unlockedSkills.has('ice_F') ? 3 : 0
                 });
               });
@@ -882,7 +936,7 @@ export class GameEngine {
               if (this.unlockedSkills.has('lightning_F')) bounces += 1;
             }
             this.projectiles.push({
-              id: Math.random().toString(), x: this.fortress.x, y: this.fortress.y,
+              id: Math.random().toString(), x: startX, y: startY,
               targetId: target.id, damage: dmg, speed: 500, source: 'fortress', heroType: el, pierceCount: 0, bouncesLeft: bounces, bouncedIds: new Set([target.id]), isCrit
             });
             continue;
@@ -893,11 +947,11 @@ export class GameEngine {
             dmg = 40;
             speed = 200;
             if (this.unlockedSkills.has('rock_G')) {
-              // Row of spikes
+              // Row of spikes - reduced spread from 30 to 10
               for(let j=-2; j<=2; j++) {
                 this.projectiles.push({
-                  id: Math.random().toString(), x: this.fortress.x + j*30, y: this.fortress.y,
-                  targetX: this.fortress.x + j*30, targetY: this.fortress.y - 300, damage: dmg, speed, source: 'fortress', heroType: el, pierceCount: 5
+                  id: Math.random().toString(), x: startX + j*10, y: startY,
+                  targetX: startX + j*10, targetY: startY - 300, damage: dmg, speed, source: 'fortress', heroType: el, pierceCount: 5
                 });
               }
               this.fortressDamageReduction = 0.5;
@@ -912,7 +966,7 @@ export class GameEngine {
 
           this.projectiles.push({
             id: Math.random().toString(),
-            x: this.fortress.x, y: this.fortress.y,
+            x: startX, y: startY,
             targetId: target.id, targetX: target.x, targetY: target.y,
             damage: dmg, speed, source: 'fortress', heroType: el, pierceCount: pierce, isGiantRock: el === 'rock' && this.unlockedSkills.has('rock_A')
           });
@@ -1396,61 +1450,52 @@ export class GameEngine {
     }
   }
 
-  summonHero() {
-    if (this.coins >= this.summonCost) {
-      const emptyIdx = this.grid.findIndex((s, i) => s === null && i < this.unlockedSlotsCount);
-      if (emptyIdx !== -1) {
-        this.coins -= this.summonCost;
-        this.summonCount++;
-        this.grid[emptyIdx] = {
-          id: Math.random().toString(),
-          heroType: this.activeElements[Math.floor(Math.random() * this.activeElements.length)],
-          star: 1
-        };
-        this.onSyncUI?.();
-      }
-    }
-  }
+  spinSlotMachine() {
+    if (this.coins >= this.summonCost && !this.isSpinning) {
+      this.coins -= this.summonCost;
+      this.isSpinning = true;
+      this.slotResult = null;
+      this.onSyncUI?.();
 
-  mergeSlots(fromIdx: number, toIdx: number) {
-    // Prevent interaction with locked slots
-    if (fromIdx >= this.unlockedSlotsCount || toIdx >= this.unlockedSlotsCount) return;
-
-    const from = this.grid[fromIdx];
-    const to = this.grid[toIdx];
-    if (!from) return;
-
-    if (!to) {
-      this.grid[toIdx] = from;
-      this.grid[fromIdx] = null;
-    } else if (from.heroType === to.heroType && from.star === to.star && fromIdx !== toIdx) {
-      if (to.star < 3) {
-        this.grid[toIdx] = { ...to, star: to.star + 1 };
-        this.grid[fromIdx] = null;
-        
-        // Trigger Element Skill
-        this.triggerElementSkill(to.heroType);
-        
-        this.gainEnergy(1);
-        
-        if (this.grid[toIdx]!.star === 3) {
-          const hero: SummonedHero = {
-            id: Math.random().toString(),
-            x: this.fortress.x + (Math.random()-0.5)*100,
-            y: this.fortress.y + (Math.random()-0.5)*100,
-            hp: 500, maxHp: 500, speed: 60, radius: 15,
-            heroType: to.heroType, star: 3, attackCooldown: 1, lastAttackTime: 0, ultCooldown: 10, lastUltTime: 0
-          };
-          
-          this.heroes.push(hero);
-          this.grid[toIdx] = null;
+      // Simulate spinning delay
+      setTimeout(() => {
+        this.isSpinning = false;
+        const rand = Math.random();
+        if (rand < 0.6) {
+          // Hero
+          const heroType = this.activeElements[Math.floor(Math.random() * this.activeElements.length)];
+          const existing = this.heroes.find(h => h.heroType === heroType);
+          if (existing) {
+            existing.star++;
+            existing.maxHp += 100;
+            existing.hp = existing.maxHp;
+            this.slotResult = { type: 'upgrade', value: heroType };
+          } else {
+            const hero: SummonedHero = {
+              id: Math.random().toString(),
+              x: this.fortress.x + (Math.random() - 0.5) * 100,
+              y: this.fortress.y + (Math.random() - 0.5) * 100,
+              hp: 500, maxHp: 500, speed: 60, radius: 15,
+              heroType: heroType, star: 1, attackCooldown: 1, lastAttackTime: 0, ultCooldown: 10, lastUltTime: 0,
+              currentAnim: 'run', frameIndex: 0, animTimer: 0
+            };
+            this.heroes.push(hero);
+            this.slotResult = { type: 'hero', value: heroType };
+          }
+        } else if (rand < 0.8) {
+          // Gold refund
+          const refund = Math.floor(this.summonCost * 1.5);
+          this.coins += refund;
+          this.slotResult = { type: 'gold', value: refund };
+        } else {
+          // Global Upgrade
+          this.fortress.maxHp += 200;
+          this.fortress.hp = Math.min(this.fortress.maxHp, this.fortress.hp + 200);
+          this.slotResult = { type: 'upgrade', value: 'fortress' };
         }
-      }
-    } else {
-      this.grid[toIdx] = from;
-      this.grid[fromIdx] = to;
+        this.onSyncUI?.();
+      }, 1500);
     }
-    this.onSyncUI?.();
   }
 
   gainEnergy(amount: number) {

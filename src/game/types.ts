@@ -188,9 +188,14 @@ export interface MaterialCount {
 }
 
 export interface PlayerState {
-  upgradeTickets: number;
-  summonTickets: number;
+  upgradeTickets: number; // 密卷
+  summonTickets: number;  // 升官帽
+  gold: number;
+  gems: number;
+  stamina: number;
+  maxStamina: number;
   heroes: Record<HeroType, PlayerHero>;
+  formation: (HeroType | null)[]; // 编队，最多4个位置
   unlockedLevels: number;
   prologueCompleted: boolean;
 }

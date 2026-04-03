@@ -9,7 +9,7 @@ export function SkillSelection({ choices, onSelect }: { choices: SkillNode[], on
       'flame': '/res/UI/skill_fire.png',
       'ice': '/res/UI/skill_ice.png',
       'lightning': '/res/UI/skill_thunder.png',
-      'wind': '/res/UI/skill_sind.png'
+      'wind': '/res/UI/skill_wind.png'
     };
     const src = iconMap[type];
     if (src) {

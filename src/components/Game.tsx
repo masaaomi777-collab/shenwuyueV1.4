@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { GameEngine } from '../game/GameEngine';
-import { MergeGrid } from './MergeGrid';
 import { SkillSelection } from './SkillSelection';
-import { Heart, Coins, Pause, Play, Home, TreeDeciduous, Mountain, Box } from 'lucide-react';
+import { Heart, Coins, Pause, Play, Home, TreeDeciduous, Mountain, Box, Zap, Shield, Star } from 'lucide-react';
 import { HeroType, LevelConfig, PlayerState } from '../game/types';
 import { Joystick } from './Joystick';
 
@@ -34,6 +33,7 @@ export function Game({ levelConfig, playerState, onBack, onGameOver, onPrologueE
 
   useEffect(() => {
     // Play background music
+    // Use the correct path relative to public root
     const bgmUrl = `/res/sound/battle.wav`;
     soundManager.playBGM(bgmUrl);
     
@@ -52,8 +52,13 @@ export function Game({ levelConfig, playerState, onBack, onGameOver, onPrologueE
   useEffect(() => {
     Promise.all([
       assets.loadImages({
-        'road': '/res/road.png?v=3.0',
-        'background': '/res/background.png?v=3.0',
+        'road': '/NEWRES/road.jpg',
+        'background': '/NEWRES/bg.png',
+        'car': '/NEWRES/Car.png',
+        'hero_1': '/NEWRES/hero1.png',
+        'hero_2': '/NEWRES/hero2.png',
+        'hero_3': '/NEWRES/hero3.png',
+        'hero_4': '/NEWRES/hero4.png',
         'bg_name': '/res/bg_name.png',
         'dec_1': '/res/dec_1.png',
         'dec_2': '/res/dec_2.png',
@@ -76,7 +81,7 @@ export function Game({ levelConfig, playerState, onBack, onGameOver, onPrologueE
         'skill_fire': '/res/UI/skill_fire.png',
         'skill_ice': '/res/UI/skill_ice.png',
         'skill_thunder': '/res/UI/skill_thunder.png',
-        'skill_wind': '/res/UI/skill_sind.png',
+        'skill_wind': '/res/UI/skill_wind.png',
         // Hero Fire Run
         'hero_fire_run_0': '/res/role/Fire/fire-run/fengguanxiapei_nv-run_0.png',
         'hero_fire_run_1': '/res/role/Fire/fire-run/fengguanxiapei_nv-run_1.png',
@@ -284,323 +289,234 @@ export function Game({ levelConfig, playerState, onBack, onGameOver, onPrologueE
     const width = canvas.width;
     const height = canvas.height;
 
+    // 3D Projection Setup
+    const horizon = height * 0.45;
+    const vanishingPointX = width / 2;
+    const camHeight = 150;
+    const focalLength = 600;
+
     ctx.clearRect(0, 0, width, height);
     
-    // Fallback background color
-    ctx.fillStyle = '#1f2937';
-    ctx.fillRect(0, 0, width, height);
-    
-    ctx.save();
-    let camX: number, camY: number;
-    if (engine.isPrologue) {
-      camX = width / 2 - 300;
-      camY = height / 2 - 400;
+    // 0. Draw Background (Static or slowly scrolling)
+    const bgImg = assets.get('background');
+    if (bgImg) {
+      // Scale background to fill the top part of the screen (horizon)
+      const bgH = horizon;
+      const bgW = width;
+      ctx.drawImage(bgImg, 0, 0, bgW, bgH);
     } else {
-      camX = width / 2 - engine.fortress.x;
-      camY = height / 2 - engine.fortress.y; // 放置在屏幕正中间
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, width, height);
     }
-    ctx.translate(camX, camY);
 
-    // 0. Draw Background
-    const levelBg = levelConfig.backgroundAsset ? assets.get(levelConfig.backgroundAsset) : null;
-    const grassImg = assets.get('grass_texture');
-    const sandImg = assets.get('sand_texture');
+    // Fill ground area below horizon to avoid black gaps
+    ctx.fillStyle = '#1e293b'; // Dark ground color
+    ctx.fillRect(0, horizon, width, height - horizon);
+
+    const project = (x: number, y: number, z: number) => {
+      // Relative to camera focus (fortress or player)
+      const focus = (engine.isPrologue && engine.player) ? engine.player : engine.fortress;
+      const relX = x - focus.x;
+      const relY = y - focus.y;
+
+      // Rotate by focus rotation so "forward" is Z
+      const rot = focus.rotation;
+      const cosR = Math.cos(rot);
+      const sinR = Math.sin(rot);
+      
+      // localZ is distance along the forward vector
+      // localX is distance along the right vector
+      const localZ = relX * cosR + relY * sinR;
+      const localX = relX * sinR - relY * cosR;
+
+      // Perspective projection
+      const zOffset = 200; 
+      const pZ = localZ + zOffset;
+      
+      if (pZ <= 50) return null; // Behind camera or too close
+
+      const scale = focalLength / pZ;
+      const screenX = vanishingPointX + localX * scale;
+      const screenY = horizon + (camHeight - z) * scale;
+      
+      return { x: screenX, y: screenY, scale: scale, pZ: pZ };
+    };
+
+    // 1. Draw Road (Projected Path)
     const roadImg = assets.get('road');
-    const roadEdgeImg = assets.get('roadedge');
-
-    if (levelBg) {
-      const pattern = ctx.createPattern(levelBg, 'repeat');
-      if (pattern) {
-        const matrix = new DOMMatrix();
-        matrix.a = 0.5; // Adjust scale as needed
-        matrix.d = 0.5;
-        pattern.setTransform(matrix);
-        ctx.fillStyle = pattern;
-        ctx.fillRect(-camX, -camY, width, height);
-      }
-    } else if (grassImg) {
-      const pattern = ctx.createPattern(grassImg, 'repeat');
-      if (pattern) {
-        const matrix = new DOMMatrix();
-        matrix.a = 0.5;
-        matrix.d = 0.5;
-        pattern.setTransform(matrix);
-        ctx.fillStyle = pattern;
-        ctx.fillRect(-camX, -camY, width, height);
-      }
-    } else {
-      ctx.fillStyle = '#1f2937';
-      ctx.fillRect(-camX, -camY, width, height);
-    }
-
-    // 1. Draw Road Path
     if (roadImg) {
-      const roadScale = 0.66;
-      const roadWidth = roadImg.width * roadScale;
+      const roadWidth = 1200; // Further enlarged to fill screen width
+      const waypoints = levelConfig.waypoints;
+      
+      // Find current segment
+      let currentIdx = engine.fortress.targetWpIdx;
+      if (currentIdx >= waypoints.length) currentIdx = waypoints.length - 1;
 
-      levelConfig.waypoints.forEach((wp, i) => {
-        if (i === 0) return;
-        const prevWp = levelConfig.waypoints[i - 1];
+      // Draw from slightly behind the car to future waypoints to ensure no gap at bottom
+      const focus = (engine.isPrologue && engine.player) ? engine.player : engine.fortress;
+      const backDist = 100;
+      const backX = focus.x - Math.cos(focus.rotation) * backDist;
+      const backY = focus.y - Math.sin(focus.rotation) * backDist;
+      
+      let lastP = project(backX, backY, 0);
+      
+      // Draw more segments ahead for "infinite" feel
+      for (let i = currentIdx; i < Math.min(currentIdx + 20, waypoints.length); i++) {
+        const wp = waypoints[i];
+        const nextP = project(wp.x, wp.y, 0);
+        
+        if (lastP && nextP) {
+          const w1 = (roadWidth / 2) * lastP.scale;
+          const w2 = (roadWidth / 2) * nextP.scale;
 
-        const dx = wp.x - prevWp.x;
-        const dy = wp.y - prevWp.y;
-        const realLen = Math.sqrt(dx * dx + dy * dy);
-        const angle = Math.atan2(dy, dx);
-
-        ctx.save();
-        ctx.translate(prevWp.x, prevWp.y);
-        ctx.rotate(angle);
-
-        // Draw Tiled Road Segment - Rotated 90 deg CW
-        const scaledTileLen = roadImg.height * roadScale;
-        const startX = -roadWidth / 2;
-        const baseLen = realLen + roadWidth;
-        const numTiles = Math.ceil(baseLen / scaledTileLen);
-
-        for (let x = 0; x < numTiles; x++) {
+          ctx.beginPath();
+          ctx.moveTo(lastP.x - w1, lastP.y);
+          ctx.lineTo(lastP.x + w1, lastP.y);
+          ctx.lineTo(nextP.x + w2, nextP.y);
+          ctx.lineTo(nextP.x - w2, nextP.y);
+          ctx.closePath();
+          
+          ctx.fillStyle = (i % 2 === 0) ? '#334155' : '#1e293b';
+          ctx.fill();
+          
+          // Draw road texture with scrolling effect
           ctx.save();
-          ctx.translate(startX + x * scaledTileLen + scaledTileLen / 2, 0);
-          ctx.rotate(Math.PI / 2);
-          ctx.drawImage(
-            roadImg,
-            -roadImg.width * roadScale / 2, -roadImg.height * roadScale / 2,
-            roadImg.width * roadScale, roadImg.height * roadScale
-          );
+          ctx.clip();
+          const texH = 400;
+          const scrollOffset = (engine.distanceTraveled % texH);
+          ctx.globalAlpha = 0.4;
+          // Draw multiple times to cover the segment if needed, or just stretch
+          ctx.drawImage(roadImg, Math.min(lastP.x - w1, nextP.x - w2), nextP.y - scrollOffset, Math.max(w1, w2) * 2, (lastP.y - nextP.y) + texH);
           ctx.restore();
         }
-
-        ctx.restore();
-      });
-    }
-
-    // 1.5 Draw Decorations
-    engine.decorations.forEach(dec => {
-      const img = assets.get(dec.type);
-      if (img) {
-        ctx.save();
-        ctx.translate(dec.x, dec.y);
-        ctx.rotate(dec.rotation);
-        const dw = img.width * dec.scale;
-        const dh = img.height * dec.scale;
-        ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
-        ctx.restore();
+        lastP = nextP;
       }
-    });
-
-    // 2. Draw waypoints (only if not prologue)
-    if (!engine.isPrologue) {
-      // Draw road path dots (optional, can be removed if roadImg is enough)
-      levelConfig.waypoints.forEach(wp => {
-        if (wp.type !== 'normal') {
-          ctx.fillStyle = '#991b1b';
-          ctx.beginPath();
-          ctx.arc(wp.x, wp.y, 30, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.strokeStyle = '#f87171';
-          ctx.lineWidth = 4;
-          ctx.stroke();
-        }
-      });
     }
 
-    // Draw decorations (Removed)
+    // 2. Draw Objects (Monsters, Projectiles, etc.)
+    // Sort by pZ descending to draw far objects first
+    const drawList: any[] = [];
 
-    // Draw Resource Nodes (Prologue)
-    engine.resourceNodes.forEach(rn => {
-      ctx.beginPath();
-      if (rn.type === 'wood') ctx.fillStyle = '#10b981';
-      else if (rn.type === 'stone') ctx.fillStyle = '#78350f';
-      else if (rn.type === 'steel') ctx.fillStyle = '#94a3b8';
-      ctx.arc(rn.x, rn.y, rn.radius, 0, Math.PI * 2);
-      ctx.fill();
-      
-      // HP bar
-      ctx.fillStyle = '#000';
-      ctx.fillRect(rn.x - 20, rn.y - rn.radius - 10, 40, 4);
-      ctx.fillStyle = '#10b981';
-      ctx.fillRect(rn.x - 20, rn.y - rn.radius - 10, 40 * (rn.hp / rn.maxHp), 4);
+    // Add monsters
+    engine.monsters.forEach(m => {
+      const p = project(m.x, m.y, 0);
+      if (p) drawList.push({ type: 'monster', data: m, ...p });
     });
 
-    // Draw Area Effects
+    // Add projectiles
+    engine.projectiles.forEach(proj => {
+      const p = project(proj.x, proj.y, 20);
+      if (p) drawList.push({ type: 'projectile', data: proj, ...p });
+    });
+
+    // Add area effects
     engine.areaEffects.forEach(ae => {
-      ctx.fillStyle = getElementColor(ae.heroType) + '40';
-      ctx.beginPath();
-      ctx.arc(ae.x, ae.y, ae.radius, 0, Math.PI * 2);
-      ctx.fill();
+      const p = project(ae.x, ae.y, 0);
+      if (p) drawList.push({ type: 'area_effect', data: ae, ...p });
     });
 
-    // Draw fortress
-    ctx.save();
-    ctx.translate(engine.fortress.x, engine.fortress.y);
-    
-    if (engine.fortress.currentAnim && engine.fortress.frameIndex !== undefined) {
-      const img = assets.get(`C001_${engine.fortress.currentAnim}_${engine.fortress.frameIndex}`);
-      ctx.rotate(engine.fortress.rotation + Math.PI / 2);
-      if (img) {
-        ctx.drawImage(img, -80, -100, 160, 200);
-      } else {
-        // Fallback to rect
-        ctx.fillStyle = engine.isPrologue ? '#4b5563' : '#3b82f6';
-        ctx.fillRect(-40, -50, 80, 100);
-      }
-    } else {
-      ctx.rotate(engine.fortress.rotation + Math.PI / 2);
-      ctx.fillStyle = engine.isPrologue ? '#4b5563' : '#3b82f6';
-      ctx.fillRect(-40, -50, 80, 100);
-    }
-    
-    ctx.restore();
+    // Add heroes
+    engine.heroes.forEach(h => {
+      const p = project(h.x, h.y, 0);
+      if (p) drawList.push({ type: 'hero', data: h, ...p });
+    });
 
-    // Draw Player (Prologue)
-    if (engine.player) {
-      const playerImg = assets.get('hero_flame');
-      const drawRadius = engine.player.radius * 4;
+    // Sort by depth
+    drawList.sort((a, b) => b.pZ - a.pZ);
+
+    // Render draw list
+    drawList.forEach(item => {
+      ctx.save();
+      ctx.translate(item.x, item.y);
+      ctx.scale(item.scale, item.scale);
+
+      if (item.type === 'monster') {
+        const m = item.data;
+        const isBoss = m.monsterType === 'M001';
+        const img = m.currentAnim && m.frameIndex !== undefined ? assets.get(`${m.monsterType}_${m.currentAnim}_${m.frameIndex}`) : null;
+        
+        ctx.globalAlpha = m.alpha !== undefined ? m.alpha : 1;
+        if (img) {
+          const scale = m.scale || (m.monsterType === 'M002' ? 0.5 : 1);
+          if (m.flipX) ctx.scale(-1, 1);
+          ctx.drawImage(img, -img.width * scale / 2, -img.height * scale, img.width * scale, img.height * scale);
+        } else {
+          ctx.fillStyle = isBoss ? '#991b1b' : '#ef4444';
+          ctx.beginPath();
+          ctx.arc(0, -20, m.radius * 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // HP bar
+        if (!m.isDead) {
+          ctx.fillStyle = '#000';
+          ctx.fillRect(-20, -100, 40, 4);
+          ctx.fillStyle = '#ef4444';
+          ctx.fillRect(-20, -100, 40 * (m.hp / m.maxHp), 4);
+        }
+      } else if (item.type === 'hero') {
+        const h = item.data;
+        const typeIdx = engine.activeElements.indexOf(h.heroType);
+        const img = assets.get(`hero_${(typeIdx % 4) + 1}`);
+        if (img) {
+          const hW = 60; // Shrunk hero size
+          const hH = img.height * (hW / img.width);
+          ctx.drawImage(img, -hW / 2, -hH, hW, hH);
+        } else {
+          ctx.fillStyle = getElementColor(h.heroType);
+          ctx.beginPath();
+          ctx.arc(0, -15, 15, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // Hero HP bar
+        ctx.fillStyle = '#000';
+        ctx.fillRect(-12, -60, 24, 2);
+        ctx.fillStyle = '#10b981';
+        ctx.fillRect(-12, -60, 24 * (h.hp / h.maxHp), 2);
+      } else if (item.type === 'projectile') {
+        const p = item.data;
+        ctx.fillStyle = getElementColor(p.heroType);
+        ctx.beginPath();
+        ctx.arc(0, 0, p.isGiantRock ? 12 : 6, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (item.type === 'area_effect') {
+        const ae = item.data;
+        ctx.fillStyle = getElementColor(ae.heroType) + '40';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, ae.radius, ae.radius * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    });
+
+    // 3. Draw Fortress (Car) at the bottom
+    if (!engine.isPrologue) {
+      const carImg = assets.get('car');
+      if (carImg) {
+        const carW = width * 1.5; // Scaled up
+        const carH = carImg.height * (carW / carImg.width);
+        // Draw car at the bottom, showing the front part
+        ctx.drawImage(carImg, (width - carW) / 2, height - carH * 0.6, carW, carH);
+      } else {
+        // Fallback car
+        ctx.fillStyle = '#3b82f6';
+        ctx.fillRect(width * 0.1, height - 100, width * 0.8, 100);
+      }
+    } else if (engine.player) {
+      // In prologue, the player is drawn as a character at the bottom center
+      const playerImg = assets.get('hero_1'); // Use hero_1 as player in prologue
       if (playerImg) {
-        ctx.drawImage(playerImg, engine.player.x - drawRadius, engine.player.y - drawRadius, drawRadius * 2, drawRadius * 2);
+        const hW = 120;
+        const hH = playerImg.height * (hW / playerImg.width);
+        ctx.drawImage(playerImg, width / 2 - hW / 2, height - hH - 20, hW, hH);
       } else {
         ctx.fillStyle = '#facc15';
         ctx.beginPath();
-        ctx.arc(engine.player.x, engine.player.y, drawRadius, 0, Math.PI * 2);
-        ctx.fill();
-        // Direction indicator
-        ctx.fillStyle = '#000';
-        ctx.beginPath();
-        ctx.arc(engine.player.x, engine.player.y - drawRadius * 0.5, 4, 0, Math.PI * 2);
+        ctx.arc(width / 2, height - 50, 30, 0, Math.PI * 2);
         ctx.fill();
       }
     }
-
-    // Draw flying materials
-    engine.flyingMaterials.forEach(fm => {
-      if (fm.type === 'wood') ctx.fillStyle = '#10b981';
-      else if (fm.type === 'stone') ctx.fillStyle = '#78350f';
-      else if (fm.type === 'steel') ctx.fillStyle = '#94a3b8';
-      ctx.beginPath();
-      ctx.arc(fm.x, fm.y, 8, 0, Math.PI * 2);
-      ctx.fill();
-    });
-
-    // Draw monsters
-    engine.monsters.forEach(m => {
-      const isBoss = m.monsterType === 'M001';
-      const drawRadius = m.radius * 4;
-      
-      if (m.currentAnim && m.frameIndex !== undefined) {
-        const img = assets.get(`${m.monsterType}_${m.currentAnim}_${m.frameIndex}`);
-        if (img) {
-          ctx.save();
-          ctx.globalAlpha = m.alpha !== undefined ? m.alpha : 1;
-          ctx.translate(m.x, m.y);
-          if (m.flipX) ctx.scale(-1, 1);
-          
-          // M002 scaled down by 1/2, M001 also scaled if specified
-          const scale = m.scale || (m.monsterType === 'M002' ? 0.5 : 1);
-          ctx.drawImage(img, -img.width * scale / 2, -img.height * scale / 2, img.width * scale, img.height * scale);
-          ctx.restore();
-        } else {
-          // Fallback
-          ctx.save();
-          ctx.globalAlpha = m.alpha !== undefined ? m.alpha : 1;
-          ctx.fillStyle = isBoss ? '#991b1b' : '#ef4444';
-          ctx.beginPath();
-          ctx.arc(m.x, m.y, drawRadius, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.restore();
-        }
-      } else if (m.spine && skeletonRendererRef.current) {
-        const rotation = 0;
-        ctx.save();
-        ctx.globalAlpha = m.alpha !== undefined ? m.alpha : 1;
-        m.spine.render(ctx, skeletonRendererRef.current, m.x, m.y, rotation, m.flipX);
-        ctx.restore();
-      } else {
-        let img = null;
-        if (isBoss) {
-          img = m.isAttacking ? assets.get('boss_1') : assets.get('boss_0');
-        } else {
-          const monsterIdx = (parseInt(m.id.slice(-1)) || 0) % 2 + 1;
-          img = assets.get(`monster_${monsterIdx}`);
-        }
-
-        if (img) {
-          ctx.save();
-          ctx.globalAlpha = m.alpha !== undefined ? m.alpha : 1;
-          ctx.drawImage(img, m.x - img.width / 2, m.y - img.height / 2, img.width, img.height);
-          ctx.restore();
-        } else {
-          ctx.save();
-          ctx.globalAlpha = m.alpha !== undefined ? m.alpha : 1;
-          ctx.fillStyle = isBoss ? '#991b1b' : '#ef4444';
-          ctx.beginPath();
-          ctx.arc(m.x, m.y, drawRadius, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.restore();
-        }
-      }
-      
-      if (!m.isDead) {
-        ctx.fillStyle = '#000';
-        ctx.fillRect(m.x - 10, m.y - drawRadius - 8, 20, 4);
-        ctx.fillStyle = '#ef4444';
-        ctx.fillRect(m.x - 10, m.y - drawRadius - 8, 20 * (m.hp / m.maxHp), 4);
-      }
-    });
-
-    // Draw heroes
-    engine.heroes.forEach(h => {
-      const drawRadius = h.radius * 4;
-      
-      if (h.spine && skeletonRendererRef.current) {
-        h.spine.render(ctx, skeletonRendererRef.current, h.x, h.y, 0, false);
-      } else {
-        const typeMap: Record<string, string> = {
-          'flame': 'fire',
-          'ice': 'ice',
-          'lightning': 'thunder',
-          'wind': 'wind'
-        };
-        const assetPrefix = typeMap[h.heroType] || h.heroType;
-        const img = assets.get(`hero_${assetPrefix}_run_${h.frameIndex || 0}`);
-        if (img) {
-          ctx.drawImage(img, h.x - drawRadius, h.y - drawRadius, drawRadius * 2, drawRadius * 2);
-        } else {
-          // Try fallback to static hero image if sequence not found
-          const staticImg = assets.get(`hero_${assetPrefix}`);
-          if (staticImg) {
-            ctx.drawImage(staticImg, h.x - drawRadius, h.y - drawRadius, drawRadius * 2, drawRadius * 2);
-          } else {
-            ctx.fillStyle = getElementColor(h.heroType);
-            ctx.beginPath();
-            ctx.arc(h.x, h.y, drawRadius, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        }
-      }
-    });
-
-    // Draw projectiles
-    engine.projectiles.forEach(p => {
-      ctx.fillStyle = getElementColor(p.heroType);
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.isGiantRock ? 12 : 6, 0, Math.PI * 2);
-      ctx.fill();
-    });
-
-    // Draw effects
-    engine.effects.forEach(e => {
-      const img = assets.get(`${e.assetPrefix}${e.frameIndex}`);
-      if (img) {
-        ctx.save();
-        ctx.translate(e.x, e.y);
-        ctx.rotate(e.rotation);
-        const w = img.width * e.scale;
-        const h = img.height * e.scale;
-        ctx.drawImage(img, -w / 2, -h / 2, w, h);
-        ctx.restore();
-      }
-    });
-
-    ctx.restore();
   };
 
   useEffect(() => {
@@ -651,7 +567,7 @@ export function Game({ levelConfig, playerState, onBack, onGameOver, onPrologueE
       </div>
 
       {/* Bottom UI */}
-      <div className={`absolute bottom-0 left-0 w-full transition-all duration-500 ${isPrologue ? 'h-48' : 'h-auto p-4 pb-8 flex flex-col gap-4'} z-10`}>
+      <div className={`absolute bottom-0 left-0 w-full transition-all duration-500 ${isPrologue ? 'h-48' : 'h-auto p-4 pb-12 flex flex-col items-center gap-4'} z-10`}>
         {isPrologue ? (
           <div className="w-full h-full flex items-center justify-between px-8">
             <div className="flex flex-col gap-2">
@@ -692,47 +608,92 @@ export function Game({ levelConfig, playerState, onBack, onGameOver, onPrologueE
             <Joystick onMove={(dx, dy) => { joystickInput.current = { dx, dy }; }} />
           </div>
         ) : (
-          <div className="flex items-center justify-between gap-4 px-2">
-            <button 
-              onClick={() => engine.usePlayerSkill()}
-              className={`w-14 h-14 flex-shrink-0 flex items-center justify-center relative active:scale-95 transition-transform ${engine.playerSkillCd <= 0 ? 'opacity-100' : 'opacity-50 grayscale'}`}
-            >
-              <img src="/res/UI/skill.png" className="absolute inset-0 w-full h-full object-contain" referrerPolicy="no-referrer" />
-              <img src="/res/UI/hulu.png" className="relative w-10 h-10 object-contain z-10" referrerPolicy="no-referrer" />
-              {engine.playerSkillCd > 0 && <span className="absolute inset-0 flex items-center justify-center text-white font-black text-xl z-20 drop-shadow-md">{Math.ceil(engine.playerSkillCd)}</span>}
-            </button>
+          <div className="w-full flex flex-col items-center gap-2 px-2 pb-2">
+            <div className="flex items-center justify-center gap-4 w-full">
+              {/* Skill Button */}
+              <button 
+                onClick={() => engine.usePlayerSkill()}
+                className={`w-14 h-14 flex-shrink-0 flex items-center justify-center relative active:scale-95 transition-transform ${engine.playerSkillCd <= 0 ? 'opacity-100' : 'opacity-50 grayscale'}`}
+              >
+                <img src="/res/UI/skill.png" className="absolute inset-0 w-full h-full object-contain" referrerPolicy="no-referrer" />
+                <img src="/res/UI/hulu.png" className="relative w-10 h-10 object-contain z-10" referrerPolicy="no-referrer" />
+                {engine.playerSkillCd > 0 && <span className="absolute inset-0 flex items-center justify-center text-white font-black text-lg z-20 drop-shadow-md">{Math.ceil(engine.playerSkillCd)}</span>}
+              </button>
 
-            <div className="flex-grow max-w-[280px] flex flex-col gap-2">
-              {/* Fortress Health Bar */}
-              <div className="w-full h-5 bg-black/60 rounded-full border-2 border-white/10 overflow-hidden relative shadow-2xl">
-                <div 
-                  className="h-full bg-gradient-to-r from-red-600 via-yellow-500 to-green-500 transition-all duration-500 ease-out" 
-                  style={{ width: `${(engine.fortress.hp / engine.fortress.maxHp) * 100}%` }} 
-                />
-                <div className="absolute inset-0 flex items-center justify-center text-[10px] font-black text-white drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)] uppercase tracking-[0.2em]">
-                  堡垒生命: {Math.ceil(engine.fortress.hp)} / {engine.fortress.maxHp}
+              {/* Buy Button */}
+              <button
+                onClick={() => engine.spinSlotMachine()}
+                disabled={engine.isSpinning || engine.coins < engine.summonCost}
+                className={`w-16 h-16 flex-shrink-0 font-bold flex flex-col items-center justify-center relative active:scale-95 transition-transform ${engine.coins >= engine.summonCost && !engine.isSpinning ? 'opacity-100' : 'opacity-50 grayscale'}`}
+              >
+                <img src="/res/UI/buy.png" className="absolute inset-0 w-full h-full object-contain" referrerPolicy="no-referrer" />
+                <div className="absolute inset-0 flex items-center justify-center z-10">
+                   <div className="flex flex-col items-center">
+                     <img src="/res/UI/icon_coin.png" alt="Summon" className="w-8 h-8 object-contain" referrerPolicy="no-referrer" />
+                     <span className="text-[12px] text-yellow-400 font-black drop-shadow-md -mt-1">{engine.summonCost}</span>
+                   </div>
+                </div>
+              </button>
+
+              {/* Slot Machine Display (Right of Buy) */}
+              <div className="relative w-40 h-24 bg-gradient-to-b from-gray-800 to-gray-900 rounded-2xl border-2 border-yellow-500 shadow-lg flex flex-col items-center p-1 overflow-hidden">
+                <div className="relative w-full h-full bg-black/40 rounded-lg border border-gray-700 flex items-center justify-center overflow-hidden">
+                  {engine.isSpinning ? (
+                    <div className="flex flex-col gap-1 animate-bounce">
+                      <div className="w-8 h-8 bg-gray-700 rounded-full animate-pulse" />
+                      <div className="w-8 h-8 bg-gray-600 rounded-full animate-pulse delay-75" />
+                    </div>
+                  ) : engine.slotResult ? (
+                    <div className="flex flex-col items-center gap-1 animate-in zoom-in duration-300">
+                      {engine.slotResult.type === 'hero' ? (
+                        <div className="flex items-center gap-1">
+                          <img src={`/NEWRES/hero${(engine.activeElements.indexOf(engine.slotResult.value) % 4) + 1}.png`} className="w-10 h-10 object-contain" referrerPolicy="no-referrer" />
+                          <span className="text-white font-bold text-[8px] uppercase">{engine.slotResult.value}</span>
+                        </div>
+                      ) : engine.slotResult.type === 'upgrade' ? (
+                        <div className="flex items-center gap-1">
+                          <div className="w-8 h-8 bg-blue-500/20 rounded-full flex items-center justify-center border border-blue-400">
+                            {engine.slotResult.value === 'fortress' ? <Shield size={16} className="text-blue-400" /> : <Star size={16} className="text-yellow-400" />}
+                          </div>
+                          <span className="text-blue-400 font-bold text-[8px] uppercase">
+                            {engine.slotResult.value === 'fortress' ? '堡垒强化' : '英雄升级'}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <Coins size={16} className="text-yellow-400" />
+                          <span className="text-yellow-400 font-bold text-xs">+{engine.slotResult.value}</span>
+                        </div>
+                      )}
+                      <button 
+                        onClick={() => { engine.slotResult = null; setTick(t => t+1); }}
+                        className="px-3 py-0.5 bg-yellow-500 text-black font-black text-[8px] rounded-full active:scale-95"
+                      >
+                        确定
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-yellow-400 font-black text-[10px] tracking-widest">幸运转盘</span>
+                  )}
                 </div>
               </div>
-              <MergeGrid engine={engine} />
             </div>
 
-            <button
-              onClick={() => engine.summonHero()}
-              className={`w-14 h-14 flex-shrink-0 font-bold flex flex-col items-center justify-center relative active:scale-95 transition-transform ${engine.coins >= engine.summonCost ? 'opacity-100' : 'opacity-50 grayscale'}`}
-            >
-              <img src="/res/UI/buy.png" className="absolute inset-0 w-full h-full object-contain" referrerPolicy="no-referrer" />
-              {/* Icon centered on the background */}
-              <div className="absolute inset-0 flex items-center justify-center z-10">
-                <img src="/res/UI/icon_coin.png" alt="Summon" className="w-8 h-8 object-contain" referrerPolicy="no-referrer" />
+            {/* Fortress Health Bar at the very bottom */}
+            <div className="w-full max-w-[400px] h-5 bg-black/60 rounded-full border border-white/20 overflow-hidden relative shadow-2xl">
+              <div 
+                className="h-full bg-gradient-to-r from-red-600 via-yellow-500 to-green-500 transition-all duration-500 ease-out" 
+                style={{ width: `${(engine.fortress.hp / engine.fortress.maxHp) * 100}%` }} 
+              />
+              <div className="absolute inset-0 flex items-center justify-center text-[8px] font-black text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)] uppercase tracking-[0.1em]">
+                堡垒生命: {Math.ceil(engine.fortress.hp)} / {engine.fortress.maxHp}
               </div>
-              {/* Coin count below the background */}
-              <div className="absolute top-full left-0 w-full flex justify-center z-20 mt-1">
-                <span className="text-[12px] text-yellow-400 font-black drop-shadow-md">{engine.summonCost}</span>
-              </div>
-            </button>
+            </div>
           </div>
         )}
       </div>
+
+      {/* Slot Machine Overlay removed */}
 
       {/* Modals */}
       {engine.isSkillSelection && (
